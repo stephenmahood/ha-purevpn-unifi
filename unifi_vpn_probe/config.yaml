@@ -1,5 +1,5 @@
 name: UniFi Outbound VPN Status Probe
-version: 0.2.2
+version: 0.2.3
 slug: unifi_vpn_status_probe
 description: Read-only diagnostics for outbound PureVPN WireGuard client status
 init: false
@@ -11,8 +11,12 @@ boot: manual
 options:
   controller_url: "https://192.168.1.1"
   api_key: ""
+  gb_network_id: ""
+  nl_network_id: ""
   verify_ssl: true
 schema:
   controller_url: url
   api_key: password
+  gb_network_id: str?
+  nl_network_id: str?
   verify_ssl: bool
