@@ -1,5 +1,5 @@
 name: UniFi Outbound VPN Status Probe
-version: 0.2.0
+version: 0.2.1
 slug: unifi_vpn_status_probe
 description: Read-only diagnostics for outbound PureVPN WireGuard client status
 init: false
