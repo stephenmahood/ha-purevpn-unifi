@@ -52,6 +52,14 @@ class PureVPN:
         self.subscription = subscription["id"]
         self.vpn_username = subscription["vpnusernames"][0]
 
+    def login_with_token(self, token):
+        """Validate an existing authorised session; never attempt password login."""
+        if not token or any(ch.isspace() for ch in token):
+            raise PureVPNError("session token is empty or malformed")
+        self.session.cookies.set("fa_token", token, domain=".purevpn.com", path="/", secure=True)
+        self._onboard(token)
+        return token
+
     def login(self, username, password, cached_token=None):
         if cached_token:
             try:
