@@ -42,8 +42,18 @@ class PureVPN:
         self.vpn_username = None
 
     def _onboard(self, token):
-        self.session.headers.update({"Authorization": "Bearer " + token, "Accept": "application/json"})
-        result = self.session.post(APP + "/v2/api/on-boarding", timeout=30)
+        # HAR-aligned onboarding: browser POST used form content type, Origin and
+        # Referer, with no explicit Authorization header. Use the authorised
+        # session cookie rather than adding a Bearer header not present in HAR.
+        self.session.headers.pop("Authorization", None)
+        self.session.cookies.set("fa_token", token, domain=".purevpn.com", path="/", secure=True)
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": APP,
+            "Referer": APP + "/v2/oauth-callback",
+        }
+        result = self.session.post(APP + "/v2/api/on-boarding", data="", headers=headers, timeout=30)
         check_response(result, "subscription lookup")
         payload = result.json()
         if payload.get("status") is not True:
