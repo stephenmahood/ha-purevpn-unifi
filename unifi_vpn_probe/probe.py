@@ -73,7 +73,7 @@ try:
     else:
         log.warning("No supported local Network Integration API route responded")
 finally:
-    session.close()
+    pass
 # Internal UniFi Network v2 route observed in the controller UI.
 # This endpoint is undocumented and may reject Integration API keys.
 try:
@@ -106,4 +106,5 @@ try:
         log.warning("Internal VPN route not available on this controller")
 except (requests.RequestException, ValueError, TypeError) as exc:
     log.warning("Internal VPN endpoint probe failed (%s)", type(exc).__name__)
+session.close()
 log.info("Read-only probe complete; no VPN settings changed")
