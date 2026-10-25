@@ -1,0 +1,38 @@
+name: PureVPN WireGuard Manager
+version: 0.1.0
+slug: purevpn_wg_manager
+description: Generate and refresh PureVPN WireGuard configurations safely
+init: false
+legacy: true
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+options:
+  username: ""
+  password: ""
+  gb_enabled: true
+  gb_country: GB
+  gb_city_id: 0
+  nl_enabled: true
+  nl_country: NL
+  nl_city_id: 0
+  refresh_minutes: 15
+  auto_generate: false
+  log_level: info
+schema:
+  username: str
+  password: password
+  gb_enabled: bool
+  gb_country: str
+  gb_city_id: int(0,999999)
+  nl_enabled: bool
+  nl_country: str
+  nl_city_id: int(0,999999)
+  refresh_minutes: int(5,1440)
+  auto_generate: bool
+  log_level: list(debug|info|warning|error)
+map:
+  - type: addon_config
+    read_only: false
