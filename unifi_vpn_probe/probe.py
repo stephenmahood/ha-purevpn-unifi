@@ -83,6 +83,26 @@ try:
     log.info("Internal VPN connections endpoint HTTP %s", response.status_code)
     if response.status_code == 200:
         payload = response.json()
+        # Report shape only. Never print arbitrary names, IDs, secrets or values.
+        if isinstance(payload, dict):
+            for key in ("data", "connections", "vpnConnections", "vpn_connections", "items", "result", "meta"):
+                if key in payload:
+                    node = payload[key]
+                    log.info("Internal response field=%s type=%s length=%s",
+                             key, type(node).__name__,
+                             len(node) if isinstance(node, (list, dict)) else "n/a")
+                    if isinstance(node, dict):
+                        for inner in ("data", "connections", "items", "vpnClients", "vpn_clients", "client", "server"):
+                            if inner in node:
+                                nested = node[inner]
+                                log.info("Internal nested field=%s.%s type=%s length=%s",
+                                         key, inner, type(nested).__name__,
+                                         len(nested) if isinstance(nested, (list, dict)) else "n/a")
+            log.info("Internal top-level JSON object field_count=%d", len(payload))
+        elif isinstance(payload, list):
+            log.info("Internal top-level JSON list length=%d", len(payload))
+        else:
+            log.info("Internal JSON payload type=%s", type(payload).__name__)
         entries = payload.get("data", []) if isinstance(payload, dict) else payload
         if not isinstance(entries, list):
             log.info("Internal VPN response shape=%s; contents suppressed", type(entries).__name__)
