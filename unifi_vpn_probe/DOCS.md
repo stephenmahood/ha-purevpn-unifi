@@ -1,17 +1,28 @@
-# UniFi Outbound VPN Status Probe v0.2.0
+# UniFi PureVPN status monitor v0.3.0
 
-Uses an API key from **UniFi Network → Settings → Integrations**.
-Enter the gateway HTTPS URL and the key in the Home Assistant app's configuration.
-The API key is masked in the settings and is never logged.
+Uses the local UniFi controller's read-only API with an X-API-Key and joins:
+- `GET /proxy/network/api/s/default/rest/networkconf` (configured VPN names, enabled state, network IDs)
+- `GET /proxy/network/v2/api/site/default/vpn/connections` (live client status).
 
-This one-shot diagnostic checks the official Network Integration API's `/sites`
-endpoint, to confirm the key and routing work. The official API may **not**
-expose real-time outbound WireGuard tunnel state. No notification automation
-or tunnel status entities are created in this version.
+No raw configuration or private keys are logged or saved.
 
-The old username/password login and legacy Network API diagnostic calls have
-been removed. The official API key is not assumed to work against the legacy
-`/proxy/network/api/s/default/rest/networkconf` endpoint.
+## Configure
+- `controller_url`: HTTPS address of your gateway
+- `api_key`: Network API key
+- `verify_ssl`: enable with a trusted certificate
+- `monitor_enabled`: **false** by default; turn on for continuous polling
+- `poll_seconds`: 30 (15–300)
+- `failure_seconds`: 120 (60–3600)
+- `notify_service`: `mobile_app_stephens_iphone`
 
-After running, check the app Logs tab and share the HTTP status output.
-It never changes your VPN configuration.
+When monitoring is enabled, start the add-on and enable **Start on boot** in the HA app UI for persistent operation. Uses HA Supervisor's internal Core API with its addon token to call the configured mobile notification service.
+
+## Alert behavior
+- Enabled `CONNECTED`: healthy
+- Disabled: no alert
+- Enabled `DISCONNECTED`, `CONNECTING`, `NOT_ESTABLISHED`: alert after threshold
+- Enabled `NOT_LISTED`: alert as **needs manual attention** after threshold. This means the enabled client is missing from the live listing, not necessarily definitely disconnected.
+- `UNKNOWN` or endpoint errors: no disconnection inferred.
+- One notification per failure event; a recovery notification on return to `CONNECTED` after a successful alert.
+
+For safety `monitor_enabled=false` performs a single read-only status snapshot without sending alerts under normal circumstances. No VPN configuration is changed. Test notifications on the phone before relying on this as the only detection mechanism. The internal API is undocumented and may change after UniFi updates.
