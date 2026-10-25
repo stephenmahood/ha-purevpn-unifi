@@ -3,6 +3,7 @@ Derived from the public API flow documented by TwoOnefour/purevpn-wg-auto-conf.
 Never log remote response bodies, tokens, WireGuard keys or profiles.
 """
 import re
+import logging
 from urllib.parse import urlsplit
 from curl_cffi import requests
 
@@ -11,6 +12,7 @@ APP = "https://my.purevpn.com"
 CLIENT_ID = "ed1ee674-0a34-4265-b4a1-141b721036eb"
 TENANT_ID = "9707f41e-21a4-bbc5-dcbc-fdf6b61cc68f"
 REDIRECT = APP + "/v2/api/fusionauth/login"
+LOG = logging.getLogger("purevpn_manager")
 
 
 class PureVPNError(Exception):
@@ -24,6 +26,14 @@ class PureVPNBlocked(PureVPNError):
 
 
 def check_response(response, stage):
+    content_type = response.headers.get("content-type", "").split(";")[0].lower()
+    if content_type not in ("text/html", "application/json", "text/plain"):
+        content_type = "other"
+    LOG.info("HTTP stage=%s status=%s content_type=%s cf_ray=%s cf_mitigated=%s retry_after=%s",
+             stage, response.status_code, content_type,
+             bool(response.headers.get("cf-ray")),
+             bool(response.headers.get("cf-mitigated")),
+             bool(response.headers.get("retry-after")))
     if response.status_code in (403, 429):
         retry = response.headers.get("retry-after", "")
         retry_desc = " (Retry-After supplied)" if retry else ""
