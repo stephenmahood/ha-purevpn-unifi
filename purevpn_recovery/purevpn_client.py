@@ -77,6 +77,7 @@ class PureVPN:
         if not token or any(ch.isspace() for ch in token):
             raise PureVPNError("session token is empty or malformed")
         self.session.cookies.set("fa_token", token, domain=".purevpn.com", path="/", secure=True)
+        LOG.info("Session token format=%s", "JWT-like" if token.count(".") == 2 else "opaque")
         self._onboard(token)
         return token
 
