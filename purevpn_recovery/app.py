@@ -64,8 +64,16 @@ def refresh(config):
     token_path = DATA / "token.txt"
     client = PureVPN()
     cached_token = token_path.read_text().strip() if token_path.exists() else None
-    LOG.info("Stage=authentication, cached_token=%s", bool(cached_token))
-    token = client.login(config["username"], config["password"], cached_token)
+    mode = config.get("auth_mode", "password")
+    if mode == "session_token":
+        LOG.info("Stage=session_token_validation")
+        supplied = config.get("session_token", "").strip()
+        if not supplied:
+            raise PureVPNError("Session token mode selected but no session token configured")
+        token = client.login_with_token(supplied)
+    else:
+        LOG.info("Stage=authentication, cached_token=%s", bool(cached_token))
+        token = client.login(config["username"], config["password"], cached_token)
     LOG.info("Stage=subscription_lookup succeeded")
     private_write(token_path, token)
     for name in ("gb", "nl"):
@@ -89,8 +97,15 @@ def main():
     config = json.loads(OPTIONS.read_text())
     logging.basicConfig(level=getattr(logging, config.get("log_level", "info").upper(), logging.INFO),
                         format="%(asctime)s %(levelname)s %(message)s")
-    if not config.get("username") or not config.get("password"):
+    mode = config.get("auth_mode", "password")
+    if mode not in ("password", "session_token"):
+        LOG.error("Unsupported authentication mode")
+        return
+    if mode == "password" and (not config.get("username") or not config.get("password")):
         LOG.warning("Set PureVPN credentials in the app Configuration tab")
+        return
+    if mode == "session_token" and not config.get("session_token", "").strip():
+        LOG.warning("Set an authorised session token in the app Configuration tab")
         return
     LOG.info("PureVPN WireGuard Manager started; auto_generate=%s; no UniFi writes",
              config.get("auto_generate", False))
@@ -107,8 +122,10 @@ def main():
             LOG.error("Automatic API requests suspended until manual add-on restart")
             return
         except PureVPNError as exc:
-            # Messages from this adapter contain no remote response bodies.
             LOG.error("PureVPN API failed: %s", str(exc))
+            if mode == "session_token":
+                LOG.error("Session validation failed; automatic requests suspended until restart")
+                return
         except Exception as exc:
             LOG.error("PureVPN refresh failed: %s", safe_error(exc))
         for _ in range(interval):
