@@ -74,4 +74,36 @@ try:
         log.warning("No supported local Network Integration API route responded")
 finally:
     session.close()
+# Internal UniFi Network v2 route observed in the controller UI.
+# This endpoint is undocumented and may reject Integration API keys.
+try:
+    response = session.get(
+        base + "/proxy/network/v2/api/site/default/vpn/connections", timeout=15
+    )
+    log.info("Internal VPN connections endpoint HTTP %s", response.status_code)
+    if response.status_code == 200:
+        payload = response.json()
+        entries = payload.get("data", []) if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            log.info("Internal VPN response shape=%s; contents suppressed", type(entries).__name__)
+        else:
+            log.info("Internal VPN connection records=%d", len(entries))
+            # Whitelist innocuous fields; never log raw response or keys.
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", ""))
+                if "purevpn" not in name.lower():
+                    continue
+                region = "GB" if "gb" in name.lower() else "NL" if "nl" in name.lower() else "Other"
+                fields = ("status", "state", "connection_status", "connectionStatus",
+                          "connected", "isConnected")
+                safe = {k: v for k in fields if isinstance((v := item.get(k)), (bool, str, int))}
+                log.info("Internal PureVPN %s connection state=%s", region, safe or "no recognised fields")
+    elif response.status_code in (401, 403):
+        log.warning("Internal VPN route requires controller session authentication; integration API key insufficient")
+    elif response.status_code == 404:
+        log.warning("Internal VPN route not available on this controller")
+except (requests.RequestException, ValueError, TypeError) as exc:
+    log.warning("Internal VPN endpoint probe failed (%s)", type(exc).__name__)
 log.info("Read-only probe complete; no VPN settings changed")
