@@ -77,41 +77,56 @@ finally:
 # Internal UniFi Network v2 route observed in the controller UI.
 # This endpoint is undocumented and may reject Integration API keys.
 try:
+    # Configuration identifies both clients. It contains private keys, so
+    # inspect only name, purpose, enabled and ID, never print/store raw data.
+    config_response = session.get(
+        base + "/proxy/network/api/s/default/rest/networkconf", timeout=15
+    )
+    log.info("Internal VPN configuration HTTP %s", config_response.status_code)
+    configured = {}
+    if config_response.status_code == 200:
+        config_data = config_response.json().get("data", [])
+        if isinstance(config_data, list):
+            for row in config_data:
+                if not isinstance(row, dict) or row.get("purpose") != "vpn-client":
+                    continue
+                name = row.get("name", "")
+                network_id = row.get("_id")
+                if not isinstance(name, str) or not isinstance(network_id, str):
+                    continue
+                if name.strip().lower() in ("purevpn - gb", "purevpn - nl"):
+                    configured[network_id] = (name.split("-")[-1].strip().upper(), row.get("enabled") is True)
     response = session.get(
         base + "/proxy/network/v2/api/site/default/vpn/connections", timeout=15
     )
     log.info("Internal VPN connections endpoint HTTP %s", response.status_code)
     if response.status_code == 200:
         payload = response.json()
-        # This endpoint exposes a top-level 'connections' list. Report only
-        # explicitly permitted metadata; never log tunnel IPs or credentials.
-        entries = payload.get("connections", []) if isinstance(payload, dict) else []
+        entries = payload.get("connections") if isinstance(payload, dict) else None
         if not isinstance(entries, list):
-            log.warning("VPN connections response was not a list")
+            log.warning("Live VPN response invalid; tunnel states UNKNOWN")
         else:
-            clients = [row for row in entries if isinstance(row, dict)
-                       and row.get("type") == "wireguard-client"]
-            log.info("Live WireGuard client connections=%d", len(clients))
-            for row in clients:
-                network_id = row.get("network_id", "")
-                labels = {
-                    cfg.get("gb_network_id", "").strip(): "GB",
-                    cfg.get("nl_network_id", "").strip(): "NL",
-                }
-                # Ignore empty mapping keys.
-                region = labels.get(network_id, "Unmapped") if network_id else "Unmapped"
-                state = row.get("status", "UNKNOWN")
-                if state not in ("CONNECTED", "CONNECTING", "DISCONNECTED", "NOT_ESTABLISHED"):
-                    state = "UNKNOWN"
-                log.info("WireGuard client region=%s status=%s mapped=%s",
-                         region, state, region != "Unmapped")
-            if not clients:
-                log.warning("No live WireGuard client records returned; absence is not proof of disconnection")
+            states = {row.get("network_id"): row.get("status")
+                      for row in entries if isinstance(row, dict)
+                      and row.get("type") == "wireguard-client"}
+            for network_id, (region, enabled) in configured.items():
+                if not enabled:
+                    state = "DISABLED"
+                elif network_id not in states:
+                    state = "NOT_LISTED"
+                else:
+                    state = states[network_id] if states[network_id] in (
+                        "CONNECTED", "CONNECTING", "DISCONNECTED", "NOT_ESTABLISHED"
+                    ) else "UNKNOWN"
+                log.info("PureVPN %s enabled=%s live_status=%s", region, enabled, state)
+            log.info("Mapped PureVPN client configurations=%d", len(configured))
+            if not configured:
+                log.warning("No PureVPN configurations matched; do not infer disconnection")
     elif response.status_code in (401, 403):
-        log.warning("Internal VPN route requires controller session authentication; integration API key insufficient")
-    elif response.status_code == 404:
-        log.warning("Internal VPN route not available on this controller")
-except (requests.RequestException, ValueError, TypeError) as exc:
-    log.warning("Internal VPN endpoint probe failed (%s)", type(exc).__name__)
+        log.warning("Internal VPN status not authorized")
+    else:
+        log.warning("Live VPN status unavailable; no disconnect inference")
+except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+    log.warning("Internal VPN diagnostic failed (%s)", type(exc).__name__)
 session.close()
 log.info("Read-only probe complete; no VPN settings changed")
