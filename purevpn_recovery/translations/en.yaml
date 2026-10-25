@@ -3,6 +3,10 @@ configuration:
     name: PureVPN account email
   password:
     name: PureVPN account password
+  auth_mode:
+    name: Authentication method
+  session_token:
+    name: Existing PureVPN session token (secret)
   gb_enabled:
     name: Generate Great Britain profile
   gb_country:
