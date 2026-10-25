@@ -1,17 +1,17 @@
-# UniFi outbound VPN status probe
-This is a one-shot **read-only** probe for confirming whether the UDM-SE's local
-Network API exposes individual PureVPN WireGuard tunnel states.
+# UniFi Outbound VPN Status Probe v0.2.0
 
-Configure a dedicated read-only UniFi account. Use HTTPS and enable certificate
-verification when your gateway presents a trusted certificate. If your gateway
-uses its default self-signed certificate, either install its CA or temporarily
-disable verification for this local diagnostic only.
+Uses an API key from **UniFi Network → Settings → Integrations**.
+Enter the gateway HTTPS URL and the key in the Home Assistant app's configuration.
+The API key is masked in the settings and is never logged.
 
-Run the app, examine the Logs tab, and share only the redacted status output.
-The app never changes VPN settings, never reports server endpoints, private keys
-or tunnel addresses and does not yet create status entities or notifications.
+This one-shot diagnostic checks the official Network Integration API's `/sites`
+endpoint, to confirm the key and routing work. The official API may **not**
+expose real-time outbound WireGuard tunnel state. No notification automation
+or tunnel status entities are created in this version.
 
-Known limitation: Network configuration can report enablement but not live
-connected status; gateway-wide VPN health is not reliable per tunnel. If the
-probe finds no suitable live status, the next stage must examine UniFi UI's
-read-only status source or SSH/WireGuard handshakes before creating alerts.
+The old username/password login and legacy Network API diagnostic calls have
+been removed. The official API key is not assumed to work against the legacy
+`/proxy/network/api/s/default/rest/networkconf` endpoint.
+
+After running, check the app Logs tab and share the HTTP status output.
+It never changes your VPN configuration.
