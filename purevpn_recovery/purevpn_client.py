@@ -3,6 +3,7 @@ Derived from the public API flow documented by TwoOnefour/purevpn-wg-auto-conf.
 Never log remote response bodies, tokens, WireGuard keys or profiles.
 """
 import re
+from urllib.parse import urlsplit
 from curl_cffi import requests
 
 AUTH = "https://auth.purevpn.com"
@@ -13,7 +14,24 @@ REDIRECT = APP + "/v2/api/fusionauth/login"
 
 
 class PureVPNError(Exception):
+    """Safe, non-secret exception for expected service errors."""
     pass
+
+
+class PureVPNBlocked(PureVPNError):
+    """Rate limit or access denial: do not retry automatically."""
+    pass
+
+
+def check_response(response, stage):
+    if response.status_code in (403, 429):
+        retry = response.headers.get("retry-after", "")
+        retry_desc = " (Retry-After supplied)" if retry else ""
+        # Never report body, cookies, URLs with query parameters or credentials.
+        reason = "access denied" if response.status_code == 403 else "rate limited"
+        raise PureVPNBlocked(f"{stage}: HTTP {response.status_code}, {reason}{retry_desc}")
+    response.raise_for_status()
+
 
 
 class PureVPN:
@@ -26,7 +44,7 @@ class PureVPN:
     def _onboard(self, token):
         self.session.headers.update({"Authorization": "Bearer " + token, "Accept": "application/json"})
         result = self.session.post(APP + "/v2/api/on-boarding", timeout=30)
-        result.raise_for_status()
+        check_response(result, "subscription lookup")
         payload = result.json()
         if payload.get("status") is not True:
             raise PureVPNError("subscription lookup failed")
@@ -39,10 +57,13 @@ class PureVPN:
             try:
                 self._onboard(cached_token)
                 return cached_token
+            except PureVPNBlocked:
+                raise
             except Exception:
                 self.session.headers.pop("Authorization", None)
-        self.session.get(AUTH + "/oauth2/authorize", params={
+        preflight = self.session.get(AUTH + "/oauth2/authorize", params={
             "client_id": CLIENT_ID, "redirect_uri": REDIRECT, "response_type": "code"}, timeout=30)
+        check_response(preflight, "authorization page")
         form = {
             "captcha_token": "", "client_id": CLIENT_ID, "code_challenge": "",
             "code_challenge_method": "", "metaData.device.name": "Windows Chrome",
@@ -55,16 +76,7 @@ class PureVPN:
         result = self.session.post(AUTH + "/oauth2/authorize", data=form, headers={
             "Origin": AUTH, "Referer": AUTH + "/",
             "Content-Type": "application/x-www-form-urlencoded"}, timeout=30, allow_redirects=True)
-        if result.status_code == 403:
-            # Do not print HTML or cookies: these can include session details.
-            # Differentiate a challenge from a general application denial.
-            server = result.headers.get("server", "").lower()
-            ray = bool(result.headers.get("cf-ray"))
-            challenge = bool(result.headers.get("cf-mitigated"))
-            reason = ("possible Cloudflare challenge" if (ray or challenge or "cloudflare" in server)
-                      else "login endpoint denied request")
-            raise PureVPNError("HTTP 403 at PureVPN login redirect (" + reason + ")")
-        result.raise_for_status()
+        check_response(result, "login redirect")
         token = self.session.cookies.get("fa_token")
         if not token:
             raise PureVPNError("login did not return token; CAPTCHA or MFA may be required")
@@ -78,7 +90,7 @@ class PureVPN:
                    "Content-Type": "application/x-www-form-urlencoded"}
         result = self.session.post(APP + "/v2/api/wireguard/get-encrypt-password",
                                    data={"username": self.vpn_username}, headers=headers, timeout=30)
-        result.raise_for_status()
+        check_response(result, "encrypted credential request")
         enc = result.json()
         if not enc.get("status"):
             raise PureVPNError("encrypted credential request failed")
@@ -90,7 +102,7 @@ class PureVPN:
             form["iCityId"] = str(city_id)
         result = self.session.post(APP + "/v2/api/wireguard/get-wg-server",
                                    data=form, headers=headers, timeout=30)
-        result.raise_for_status()
+        check_response(result, "WireGuard server request")
         response = result.json()
         if not response.get("status"):
             raise PureVPNError("server configuration request failed")
