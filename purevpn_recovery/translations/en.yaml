@@ -1,0 +1,23 @@
+configuration:
+  username:
+    name: PureVPN account email
+  password:
+    name: PureVPN account password
+  gb_enabled:
+    name: Generate Great Britain profile
+  gb_country:
+    name: GB country code
+  gb_city_id:
+    name: GB city ID (0 = unspecified)
+  nl_enabled:
+    name: Generate Netherlands profile
+  nl_country:
+    name: NL country code
+  nl_city_id:
+    name: NL city ID (0 = unspecified)
+  refresh_minutes:
+    name: Profile refresh interval (minutes)
+  auto_generate:
+    name: Enable PureVPN API generation (off by default)
+  log_level:
+    name: Logging level
