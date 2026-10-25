@@ -101,6 +101,9 @@ def main():
             refresh(config)
         except Exception as exc:
             LOG.error("PureVPN refresh failed: %s", safe_error(exc))
+            if "403" in str(exc):
+                LOG.error("Stopping authentication retries until app restart")
+                return
         for _ in range(interval):
             if not RUNNING:
                 break
