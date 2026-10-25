@@ -1,132 +1,137 @@
-"""Read-only official UniFi Network Integration API probe; no VPN changes."""
+"""Read-only UniFi VPN monitor with optional Home Assistant notifications.
+
+Never logs, stores or modifies WireGuard keys or full network configurations.
+"""
 import json
 import logging
+import time
 from pathlib import Path
 from urllib.parse import urlparse
-
 import requests
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-log = logging.getLogger("unifi_vpn_probe")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("unifi_vpn_monitor")
 cfg = json.loads(Path("/data/options.json").read_text())
 base = cfg["controller_url"].rstrip("/")
 parsed = urlparse(base)
 if parsed.scheme != "https" or not parsed.hostname:
-    raise ValueError("Controller URL must use HTTPS")
-key = cfg.get("api_key", "").strip()
-if not key:
-    raise ValueError("Configure a UniFi Network Integration API key")
+    raise ValueError("HTTPS controller URL required")
+api_key = cfg.get("api_key", "").strip()
+if not api_key:
+    raise ValueError("UniFi API key missing")
 session = requests.Session()
 session.verify = cfg.get("verify_ssl", True)
-session.headers.update({"Accept": "application/json", "X-API-Key": key})
-# Only official integration endpoints are used in API-key mode.
-# Legacy /proxy/network/api/... endpoints require different authentication
-# and must not be assumed to accept the new integration API key.
-candidate_bases = (
-    "/proxy/network/integration/v1",
-    "/integration/v1",
-)
-try:
-    for prefix in candidate_bases:
-        try:
-            response = session.get(base + prefix + "/sites", timeout=15)
-            log.info("Official Network API (%s) sites HTTP %s",
-                     prefix, response.status_code)
-            if response.status_code == 200:
-                payload = response.json()
-                # Site metadata can be sensitive. Record only number of sites.
-                sites = payload.get("data", []) if isinstance(payload, dict) else []
-                log.info("Official API authenticated; listed %s site records",
-                         len(sites) if isinstance(sites, list) else "unknown")
-                # Check candidate path separately; unsupported paths return 404.
-                if isinstance(sites, list):
-                    for site in sites[:3]:
-                        sid = site.get("id")
-                        if not isinstance(sid, str) or not sid:
-                            continue
-                        path = prefix + "/sites/" + sid + "/vpn-clients"
-                        response_vpn = session.get(base + path, timeout=15)
-                        log.info("VPN clients listing HTTP %s", response_vpn.status_code)
-                        if response_vpn.status_code != 200:
-                            continue
-                        listing = response_vpn.json()
-                        records = listing.get("data", []) if isinstance(listing, dict) else []
-                        log.info("VPN client records returned: %s", len(records) if isinstance(records, list) else "unknown")
-                        if isinstance(records, list):
-                            for client in records:
-                                if not isinstance(client, dict):
-                                    continue
-                                name = str(client.get("name", "")).lower()
-                                if "purevpn" not in name:
-                                    continue
-                                region = "GB" if "gb" in name else "NL" if "nl" in name else "unclassified"
-                                # Print only known harmless connection-status fields.
-                                permitted = ("status", "connectionStatus", "state", "connected", "isConnected")
-                                values = {k: client[k] for k in permitted if k in client and isinstance(client[k], (str, bool))}
-                                log.info("PureVPN %s live_status=%s", region, values or "not exposed")
-                break
-            if response.status_code in (401, 403):
-                log.warning("API key rejected or insufficient access")
-                break
-        except (requests.RequestException, ValueError, TypeError) as exc:
-            log.warning("Official API probe failed (%s)", type(exc).__name__)
-    else:
-        log.warning("No supported local Network Integration API route responded")
-finally:
-    pass
-# Internal UniFi Network v2 route observed in the controller UI.
-# This endpoint is undocumented and may reject Integration API keys.
-try:
-    # Configuration identifies both clients. It contains private keys, so
-    # inspect only name, purpose, enabled and ID, never print/store raw data.
-    config_response = session.get(
-        base + "/proxy/network/api/s/default/rest/networkconf", timeout=15
-    )
-    log.info("Internal VPN configuration HTTP %s", config_response.status_code)
-    configured = {}
-    if config_response.status_code == 200:
-        config_data = config_response.json().get("data", [])
-        if isinstance(config_data, list):
-            for row in config_data:
-                if not isinstance(row, dict) or row.get("purpose") != "vpn-client":
-                    continue
-                name = row.get("name", "")
-                network_id = row.get("_id")
-                if not isinstance(name, str) or not isinstance(network_id, str):
-                    continue
-                if name.strip().lower() in ("purevpn - gb", "purevpn - nl"):
-                    configured[network_id] = (name.split("-")[-1].strip().upper(), row.get("enabled") is True)
-    response = session.get(
-        base + "/proxy/network/v2/api/site/default/vpn/connections", timeout=15
-    )
-    log.info("Internal VPN connections endpoint HTTP %s", response.status_code)
-    if response.status_code == 200:
-        payload = response.json()
-        entries = payload.get("connections") if isinstance(payload, dict) else None
-        if not isinstance(entries, list):
-            log.warning("Live VPN response invalid; tunnel states UNKNOWN")
+session.headers.update({"Accept": "application/json", "X-API-Key": api_key})
+config_url = base + "/proxy/network/api/s/default/rest/networkconf"
+connections_url = base + "/proxy/network/v2/api/site/default/vpn/connections"
+interval = max(15, int(cfg.get("poll_seconds", 30)))
+failure_after = max(60, int(cfg.get("failure_seconds", 120)))
+monitor = bool(cfg.get("monitor_enabled", False))
+notify_service = cfg.get("notify_service", "mobile_app_stephens_iphone")
+if not notify_service.startswith("mobile_app_") or not all(
+    c.isalnum() or c == "_" for c in notify_service
+):
+    raise ValueError("notify_service must be a Home Assistant mobile_app notify service")
+status = {region: {"since": None, "alerted": False} for region in ("GB", "NL")}
+# No key is ever included in exception messages.
+def get_json(url):
+    r = session.get(url, timeout=15)
+    if r.status_code != 200:
+        log.warning("UniFi endpoint HTTP %d", r.status_code)
+        return None
+    return r.json()
+
+def read_states():
+    config = get_json(config_url)
+    live = get_json(connections_url)
+    if not isinstance(config, dict) or not isinstance(live, dict):
+        return None
+    networks = config.get("data")
+    connections = live.get("connections")
+    if not isinstance(networks, list) or not isinstance(connections, list):
+        log.warning("Unexpected UniFi response schema")
+        return None
+    active = {}
+    for connection in connections:
+        if isinstance(connection, dict) and connection.get("type") == "wireguard-client":
+            active[connection.get("network_id")] = connection.get("status")
+    result = {}
+    for row in networks:
+        if not isinstance(row, dict) or row.get("purpose") != "vpn-client":
+            continue
+        name = str(row.get("name", "")).strip().lower()
+        region = {"purevpn - gb": "GB", "purevpn - nl": "NL"}.get(name)
+        if not region:
+            continue
+        if row.get("enabled") is not True:
+            result[region] = "DISABLED"
+        elif row.get("_id") not in active:
+            result[region] = "NOT_LISTED"
         else:
-            states = {row.get("network_id"): row.get("status")
-                      for row in entries if isinstance(row, dict)
-                      and row.get("type") == "wireguard-client"}
-            for network_id, (region, enabled) in configured.items():
-                if not enabled:
-                    state = "DISABLED"
-                elif network_id not in states:
-                    state = "NOT_LISTED"
+            state = active[row["_id"]]
+            result[region] = state if state in (
+                "CONNECTED", "CONNECTING", "DISCONNECTED", "NOT_ESTABLISHED"
+            ) else "UNKNOWN"
+    return result
+
+def send_notification(region, recovered, detail):
+    message = (f"PureVPN {region} has recovered and is CONNECTED." if recovered
+               else f"PureVPN {region} needs manual attention. UniFi reports {detail} "
+                    f"for at least {failure_after} seconds.")
+    token = __import__("os").environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        log.error("Notification unavailable: SUPERVISOR_TOKEN missing")
+        return False
+    try:
+        r = requests.post(
+            "http://supervisor/core/api/services/notify/" + notify_service,
+            headers={"Authorization": "Bearer " + token},
+            json={"title": f"PureVPN {region} " + ("reconnected" if recovered else "connection alert"),
+                  "message": message},
+            timeout=15,
+        )
+        if r.status_code not in (200, 201):
+            log.warning("Home Assistant notification returned HTTP %d", r.status_code)
+            return False
+        return True
+    except requests.RequestException:
+        log.warning("Home Assistant notification could not be delivered")
+        return False
+
+log.info("UniFi PureVPN status monitor starting; monitoring=%s", monitor)
+while True:
+    try:
+        current = read_states()
+        now = time.monotonic()
+        if current is None:
+            log.warning("UniFi API unavailable; no tunnel state inferred")
+        else:
+            for region in ("GB", "NL"):
+                state = current.get(region, "UNKNOWN")
+                log.info("PureVPN %s status=%s", region, state)
+                item = status[region]
+                if state == "CONNECTED":
+                    if item["alerted"] and send_notification(region, True, state):
+                        item["alerted"] = False
+                    item["since"] = None
+                elif state == "DISABLED":
+                    item["since"] = None
+                    item["alerted"] = False
+                elif state in ("DISCONNECTED", "NOT_ESTABLISHED", "CONNECTING", "NOT_LISTED"):
+                    # NOT_LISTED means an enabled tunnel is absent from UniFi's
+                    # live connection list, not a confirmed disconnected state.
+                    if item["since"] is None:
+                        item["since"] = now
+                    if not item["alerted"] and now - item["since"] >= failure_after:
+                        if send_notification(region, False, state):
+                            item["alerted"] = True
                 else:
-                    state = states[network_id] if states[network_id] in (
-                        "CONNECTED", "CONNECTING", "DISCONNECTED", "NOT_ESTABLISHED"
-                    ) else "UNKNOWN"
-                log.info("PureVPN %s enabled=%s live_status=%s", region, enabled, state)
-            log.info("Mapped PureVPN client configurations=%d", len(configured))
-            if not configured:
-                log.warning("No PureVPN configurations matched; do not infer disconnection")
-    elif response.status_code in (401, 403):
-        log.warning("Internal VPN status not authorized")
-    else:
-        log.warning("Live VPN status unavailable; no disconnect inference")
-except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
-    log.warning("Internal VPN diagnostic failed (%s)", type(exc).__name__)
+                    # Unknown status is not treated as a disconnection.
+                    item["since"] = None
+    except (requests.RequestException, ValueError, TypeError, KeyError):
+        log.warning("UniFi status polling failed; no disconnection inferred")
+    if not monitor:
+        break
+    time.sleep(interval)
 session.close()
-log.info("Read-only probe complete; no VPN settings changed")
+log.info("VPN monitor stopped")
