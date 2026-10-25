@@ -38,7 +38,32 @@ try:
                 sites = payload.get("data", []) if isinstance(payload, dict) else []
                 log.info("Official API authenticated; listed %s site records",
                          len(sites) if isinstance(sites, list) else "unknown")
-                log.info("VPN client status via official API: not yet verified")
+                # Check candidate path separately; unsupported paths return 404.
+                if isinstance(sites, list):
+                    for site in sites[:3]:
+                        sid = site.get("id")
+                        if not isinstance(sid, str) or not sid:
+                            continue
+                        path = prefix + "/sites/" + sid + "/vpn-clients"
+                        response_vpn = session.get(base + path, timeout=15)
+                        log.info("VPN clients listing HTTP %s", response_vpn.status_code)
+                        if response_vpn.status_code != 200:
+                            continue
+                        listing = response_vpn.json()
+                        records = listing.get("data", []) if isinstance(listing, dict) else []
+                        log.info("VPN client records returned: %s", len(records) if isinstance(records, list) else "unknown")
+                        if isinstance(records, list):
+                            for client in records:
+                                if not isinstance(client, dict):
+                                    continue
+                                name = str(client.get("name", "")).lower()
+                                if "purevpn" not in name:
+                                    continue
+                                region = "GB" if "gb" in name else "NL" if "nl" in name else "unclassified"
+                                # Print only known harmless connection-status fields.
+                                permitted = ("status", "connectionStatus", "state", "connected", "isConnected")
+                                values = {k: client[k] for k in permitted if k in client and isinstance(client[k], (str, bool))}
+                                log.info("PureVPN %s live_status=%s", region, values or "not exposed")
                 break
             if response.status_code in (401, 403):
                 log.warning("API key rejected or insufficient access")
