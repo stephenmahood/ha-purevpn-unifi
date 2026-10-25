@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import signal
 import time
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption, PublicFormat
@@ -47,11 +48,25 @@ def keys_for(name):
     return private, public
 
 
+def safe_error(exc):
+    # Never log HTTP response bodies, query strings, secrets or raw exception text.
+    response = getattr(exc, "response", None)
+    if response is not None:
+        parts = urlsplit(str(getattr(response, "url", "")))
+        host = parts.hostname or "unknown"
+        if host not in ("auth.purevpn.com", "my.purevpn.com"):
+            return f"HTTP {response.status_code} at unrecognized host"
+        return f"HTTP {response.status_code} at {host}{parts.path}"
+    return type(exc).__name__
+
+
 def refresh(config):
     token_path = DATA / "token.txt"
     client = PureVPN()
     cached_token = token_path.read_text().strip() if token_path.exists() else None
+    LOG.info("Authenticating with PureVPN (cached token=%s)", bool(cached_token))
     token = client.login(config["username"], config["password"], cached_token)
+    LOG.info("PureVPN authentication and subscription lookup succeeded")
     private_write(token_path, token)
     for name in ("gb", "nl"):
         if not config.get(name + "_enabled", False):
@@ -60,11 +75,12 @@ def refresh(config):
             private, public = keys_for(name)
             country = config[name + "_country"].upper()
             city = int(config[name + "_city_id"])
+            LOG.info("Requesting %s WireGuard profile (country=%s)", name.upper(), country)
             profile = client.generate(country, city, private, public)
             private_write(DATA / "profiles" / (name + ".conf"), profile)
             LOG.info("%s profile generated privately (country=%s)", name.upper(), country)
         except Exception as exc:
-            LOG.error("%s profile generation failed (%s)", name.upper(), type(exc).__name__)
+            LOG.error("%s profile generation failed: %s", name.upper(), safe_error(exc))
 
 
 def main():
@@ -84,7 +100,7 @@ def main():
         try:
             refresh(config)
         except Exception as exc:
-            LOG.error("PureVPN refresh failed (%s)", type(exc).__name__)
+            LOG.error("PureVPN refresh failed: %s", safe_error(exc))
         for _ in range(interval):
             if not RUNNING:
                 break
