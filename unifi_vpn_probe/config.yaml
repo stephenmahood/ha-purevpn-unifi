@@ -1,0 +1,22 @@
+name: UniFi Outbound VPN Status Probe
+version: 0.1.0
+slug: unifi_vpn_status_probe
+description: Read-only diagnostics for outbound PureVPN WireGuard client status
+init: false
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: manual
+options:
+  controller_url: "https://192.168.1.1"
+  username: ""
+  password: ""
+  site: default
+  verify_ssl: true
+schema:
+  controller_url: url
+  username: str
+  password: password
+  site: str
+  verify_ssl: bool
