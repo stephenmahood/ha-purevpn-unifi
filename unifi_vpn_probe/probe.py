@@ -1,71 +1,52 @@
-"""Read-only diagnostics. Never prints keys, endpoints, IPs or credentials."""
+"""Read-only official UniFi Network Integration API probe; no VPN changes."""
 import json
 import logging
-import re
 from pathlib import Path
 from urllib.parse import urlparse
+
 import requests
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("unifi_vpn_probe")
 cfg = json.loads(Path("/data/options.json").read_text())
-url = cfg["controller_url"].rstrip("/")
-parsed = urlparse(url)
+base = cfg["controller_url"].rstrip("/")
+parsed = urlparse(base)
 if parsed.scheme != "https" or not parsed.hostname:
     raise ValueError("Controller URL must use HTTPS")
-if not cfg["username"] or not cfg["password"]:
-    raise ValueError("Configure a dedicated read-only UniFi account")
-site = cfg.get("site", "default")
-if not re.fullmatch(r"[a-zA-Z0-9_-]+", site):
-    raise ValueError("Invalid site reference")
+key = cfg.get("api_key", "").strip()
+if not key:
+    raise ValueError("Configure a UniFi Network Integration API key")
 session = requests.Session()
 session.verify = cfg.get("verify_ssl", True)
-session.headers.update({"Accept": "application/json"})
+session.headers.update({"Accept": "application/json", "X-API-Key": key})
+# Only official integration endpoints are used in API-key mode.
+# Legacy /proxy/network/api/... endpoints require different authentication
+# and must not be assumed to accept the new integration API key.
+candidate_bases = (
+    "/proxy/network/integration/v1",
+    "/integration/v1",
+)
 try:
-    auth = session.post(url + "/api/auth/login",
-                        json={"username":cfg["username"], "password":cfg["password"]},
-                        timeout=15)
-    log.info("Controller authentication HTTP %s", auth.status_code)
-    auth.raise_for_status()
-    # Query only known read-only endpoints. Raw responses are deliberately
-    # discarded; they can contain WireGuard private keys and credentials.
-    endpoints = {
-        "vpn_config": "/proxy/network/api/s/" + site + "/rest/networkconf",
-        "vpn_health": "/proxy/network/api/s/" + site + "/stat/health",
-        "gateway": "/proxy/network/api/s/" + site + "/stat/device",
-    }
-    for label, path in endpoints.items():
+    for prefix in candidate_bases:
         try:
-            result = session.get(url + path, timeout=15)
-            log.info("%s HTTP %s", label, result.status_code)
-            if result.status_code != 200:
-                continue
-            data = result.json().get("data", [])
-            if label == "vpn_config":
-                matched = [x for x in data if x.get("purpose") == "vpn-client" and
-                           "purevpn" in str(x.get("name", "")).lower()]
-                for item in matched:
-                    # Whitelist possible status fields only. Do not reveal other fields.
-                    fields = ("state", "status", "connection_status", "connected",
-                              "last_handshake", "last_handshake_time")
-                    values = {k: str(item[k])[:80] for k in fields if k in item}
-                    log.info("PureVPN client %s: status_fields=%s",
-                             "GB" if "gb" in item.get("name","").lower() else
-                             "NL" if "nl" in item.get("name","").lower() else "Other",
-                             values or "none")
-                log.info("Matched PureVPN client configurations: %d", len(matched))
-            elif label == "vpn_health":
-                for item in data:
-                    if item.get("subsystem") == "vpn":
-                        log.info("Site VPN health status=%s (not per-client)",
-                                 str(item.get("status","unknown"))[:50])
-            elif label == "gateway":
-                log.info("Gateway data received: %s records (raw content suppressed)", len(data))
-        except Exception as exc:
-            log.warning("%s inspection failed: %s", label, type(exc).__name__)
+            response = session.get(base + prefix + "/sites", timeout=15)
+            log.info("Official Network API (%s) sites HTTP %s",
+                     prefix, response.status_code)
+            if response.status_code == 200:
+                payload = response.json()
+                # Site metadata can be sensitive. Record only number of sites.
+                sites = payload.get("data", []) if isinstance(payload, dict) else []
+                log.info("Official API authenticated; listed %s site records",
+                         len(sites) if isinstance(sites, list) else "unknown")
+                log.info("VPN client status via official API: not yet verified")
+                break
+            if response.status_code in (401, 403):
+                log.warning("API key rejected or insufficient access")
+                break
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            log.warning("Official API probe failed (%s)", type(exc).__name__)
+    else:
+        log.warning("No supported local Network Integration API route responded")
 finally:
-    try:
-        session.post(url + "/api/auth/logout", timeout=10)
-    except Exception:
-        pass
-log.info("Read-only probe complete. No VPN settings changed.")
+    session.close()
+log.info("Read-only probe complete; no VPN settings changed")
