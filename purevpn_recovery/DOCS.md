@@ -17,3 +17,9 @@ The app emits operational logs but never logs tokens, credentials, private keys 
 ## Authentication and rate-limit handling (v0.1.3)
 
 The app records safe stages (authorization page, login redirect, subscription lookup, profile request) and distinguishes HTTP 403 and 429 without logging cookies, response bodies or tokens. On either access denial or rate limiting, automatic requests stop until the app is manually restarted. Do not continuously retry if PureVPN challenges your browser session. The add-on cannot resolve CAPTCHA or MFA prompts.
+
+## v0.1.4 Session-token mode
+
+Set `auth_mode: session_token` and provide an existing authorised `fa_token` in the secret `session_token` setting. Leave the username/password mode available for ordinary authentication. The add-on validates the token against the subscription endpoint and does **not** attempt a password login as fallback in token mode. When token validation fails or the API responds with 403/429, automatic attempts stop until manual restart.
+
+Never put a session token in a GitHub issue, logs, screenshot or shared configuration export. Tokens can expire or be tied to an authorised browser session. This feature is experimental and does not bypass CAPTCHA, MFA or access controls. Profiles and tokens are still saved in the app's private storage.
