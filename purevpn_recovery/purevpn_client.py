@@ -55,6 +55,15 @@ class PureVPN:
         result = self.session.post(AUTH + "/oauth2/authorize", data=form, headers={
             "Origin": AUTH, "Referer": AUTH + "/",
             "Content-Type": "application/x-www-form-urlencoded"}, timeout=30, allow_redirects=True)
+        if result.status_code == 403:
+            # Do not print HTML or cookies: these can include session details.
+            # Differentiate a challenge from a general application denial.
+            server = result.headers.get("server", "").lower()
+            ray = bool(result.headers.get("cf-ray"))
+            challenge = bool(result.headers.get("cf-mitigated"))
+            reason = ("possible Cloudflare challenge" if (ray or challenge or "cloudflare" in server)
+                      else "login endpoint denied request")
+            raise PureVPNError("HTTP 403 at PureVPN login redirect (" + reason + ")")
         result.raise_for_status()
         token = self.session.cookies.get("fa_token")
         if not token:
