@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption, PublicFormat
-from purevpn_client import PureVPN
+from purevpn_client import PureVPN, PureVPNBlocked, PureVPNError
 
 DATA = Path("/data")
 OPTIONS = DATA / "options.json"
@@ -64,9 +64,9 @@ def refresh(config):
     token_path = DATA / "token.txt"
     client = PureVPN()
     cached_token = token_path.read_text().strip() if token_path.exists() else None
-    LOG.info("Authenticating with PureVPN (cached token=%s)", bool(cached_token))
+    LOG.info("Stage=authentication, cached_token=%s", bool(cached_token))
     token = client.login(config["username"], config["password"], cached_token)
-    LOG.info("PureVPN authentication and subscription lookup succeeded")
+    LOG.info("Stage=subscription_lookup succeeded")
     private_write(token_path, token)
     for name in ("gb", "nl"):
         if not config.get(name + "_enabled", False):
@@ -79,6 +79,8 @@ def refresh(config):
             profile = client.generate(country, city, private, public)
             private_write(DATA / "profiles" / (name + ".conf"), profile)
             LOG.info("%s profile generated privately (country=%s)", name.upper(), country)
+        except PureVPNBlocked:
+            raise
         except Exception as exc:
             LOG.error("%s profile generation failed: %s", name.upper(), safe_error(exc))
 
@@ -99,11 +101,16 @@ def main():
     while RUNNING:
         try:
             refresh(config)
+        except PureVPNBlocked as exc:
+            # Explicitly do not repeat login after an access denial or rate limit.
+            LOG.error("PureVPN API blocked: %s", str(exc))
+            LOG.error("Automatic API requests suspended until manual add-on restart")
+            return
+        except PureVPNError as exc:
+            # Messages from this adapter contain no remote response bodies.
+            LOG.error("PureVPN API failed: %s", str(exc))
         except Exception as exc:
             LOG.error("PureVPN refresh failed: %s", safe_error(exc))
-            if "403" in str(exc):
-                LOG.error("Stopping authentication retries until app restart")
-                return
         for _ in range(interval):
             if not RUNNING:
                 break
