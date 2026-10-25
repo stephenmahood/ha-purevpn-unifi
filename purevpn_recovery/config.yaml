@@ -1,5 +1,5 @@
 name: PureVPN WireGuard Manager
-version: 0.1.2
+version: 0.1.3
 slug: purevpn_wg_manager
 description: Generate and refresh PureVPN WireGuard configurations safely
 init: false
