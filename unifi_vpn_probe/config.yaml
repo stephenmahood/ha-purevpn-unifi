@@ -1,5 +1,5 @@
 name: UniFi Outbound VPN Status Probe
-version: 0.2.4
+version: 0.3.0
 slug: unifi_vpn_status_probe
 description: Read-only diagnostics for outbound PureVPN WireGuard client status
 init: false
@@ -7,16 +7,25 @@ arch:
   - amd64
   - aarch64
 startup: application
-boot: manual
+boot: auto
+homeassistant_api: true
 options:
   controller_url: "https://192.168.1.1"
   api_key: ""
   gb_network_id: ""
   nl_network_id: ""
   verify_ssl: true
+  monitor_enabled: false
+  poll_seconds: 30
+  failure_seconds: 120
+  notify_service: mobile_app_stephens_iphone
 schema:
   controller_url: url
   api_key: password
   gb_network_id: str?
   nl_network_id: str?
   verify_ssl: bool
+  monitor_enabled: bool
+  poll_seconds: int(15,300)
+  failure_seconds: int(60,3600)
+  notify_service: str
