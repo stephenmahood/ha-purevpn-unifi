@@ -1,5 +1,5 @@
 name: PureVPN WireGuard Manager
-version: 0.1.3
+version: 0.1.4
 slug: purevpn_wg_manager
 description: Generate and refresh PureVPN WireGuard configurations safely
 init: false
@@ -12,6 +12,8 @@ boot: auto
 options:
   username: ""
   password: ""
+  auth_mode: password
+  session_token: ""
   gb_enabled: true
   gb_country: GB
   gb_city_id: 0
@@ -24,6 +26,8 @@ options:
 schema:
   username: str
   password: password
+  auth_mode: list(password|session_token)
+  session_token: password
   gb_enabled: bool
   gb_country: str
   gb_city_id: int(0,999999)
